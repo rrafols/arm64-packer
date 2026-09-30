@@ -70,7 +70,7 @@ README.md
 ## Milestones
 
 - [x] M0  smallest signed arm64 Mach-O that execs and returns 42 (baseline size)
-- [ ] M1  W^X probe: map rw-, write code, mprotect r-x, call it
+- [x] M1  W^X probe: map rw-, write code, mprotect r-x, call it
 - [ ] M2  AArch64 oneKpaq mode-3 decoder, round-trip vs real encoder
 - [ ] M3  pack.py: hand header + stub + packed payload, self-signed, runs
 - [ ] M4  apply to the intro payload; measure vs the 52 KB linked build
@@ -97,5 +97,20 @@ verifies it. What it settled:
   because arm64 pages are 4× larger. The *packed payload* is the number worth
   minimising, not the file size the kernel rounds up to.
 
-Next: M1, the W^X unpack path (arm64 has no RWX to unpack into, unlike the
-x86-64 stub).
+**M1 done** — `probes/wx.c` tests the three W^X paths. Result on an ad-hoc
+binary with no hardened runtime and no entitlements:
+
+* **`mmap` RW → write → `mprotect` RX → call: works.** This is the target — no
+  `MAP_JIT`, no entitlement. The stub resolves `mmap`/`mprotect` through the
+  `dlsym` it already has, unpacks the intro into an RW region, flips it to RX,
+  and jumps. Two calls more than the x86-64 stub, which just jumped into RWX
+  `__TEXT`.
+* `mmap` RWX directly: fails, as expected on arm64.
+* `MAP_JIT` + `pthread_jit_write_protect_np`: works, but needs the JIT mapping
+  and the toggle — kept in reserve, not needed.
+
+Open optimisation for M3: give the Mach-O a second segment with `initprot` rw-
+and `maxprot` rwx and unpack into it, to save the `mmap` (the `mprotect` RX
+transition is the same one M1 proved). Decide when building the real stub.
+
+Next: M2, the AArch64 oneKpaq mode-3 decoder — the substantial piece.
