@@ -86,7 +86,23 @@ that exercise different shift values: code, text, random, zeros, repetitive data
 decoder with clang's integrated assembler (no nasm needed), decompress each
 encoder output, and compare to the original.
 
+## Implementation steps (resumable — each is a commit with a passing test)
+
+- [x] **A. 80-bit `fsqrt`** — `xsqrt.S`, the one new primitive. Bit-exact vs real
+  x87 `sqrtl` (Rosetta) over 50k random + edge cases: `bash test/sqrt_test.sh`.
+- [ ] **B. x87 subset for the decoder** — pull `xfromint`, `xdiv`/`xdivr`, `xadd`,
+  `xfist32` from the intro's `x87.S` into a decoder-local module (or include it),
+  with the same per-op test against Rosetta. Only the ops `CalculateSubRange`
+  uses are needed.
+- [ ] **C. `CalculateSubRange` in AArch64** — port the weight loop
+  (`p=1; sqrt while weight halves; p = c0/p; p = c1/p; ...; range/(1+p)` → int32)
+  and test its output against the encoder's own subrange values.
+- [ ] **D. the decoder control flow** — the integer arithmetic coder + context /
+  model loops from `onekpaq_decompressor64.asm`, calling C's subrange routine.
+- [ ] **E. full round-trip** — decode the encoder's output for the code/text/
+  random/zeros/repetitive spread and compare byte-for-byte.
+
 ## Status
 
-Investigation complete (precision settled, encoder built). Implementation of the
-AArch64 decoder and the new 80-bit `fsqrt` not yet started.
+Investigation complete; **step A done** (80-bit `fsqrt`, bit-exact). Next: step B,
+lifting the rest of the 80-bit ops the subrange calculation needs.

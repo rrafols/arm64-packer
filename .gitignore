@@ -1,2 +1,6 @@
 build/
 wx
+decoder/test/ref80
+decoder/test/drv
+decoder/test/*.txt
+decoder/test/out.*
