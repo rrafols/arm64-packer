@@ -90,10 +90,11 @@ encoder output, and compare to the original.
 
 - [x] **A. 80-bit `fsqrt`** — `xsqrt.S`, the one new primitive. Bit-exact vs real
   x87 `sqrtl` (Rosetta) over 50k random + edge cases: `bash test/sqrt_test.sh`.
-- [ ] **B. x87 subset for the decoder** — pull `xfromint`, `xdiv`/`xdivr`, `xadd`,
-  `xfist32` from the intro's `x87.S` into a decoder-local module (or include it),
-  with the same per-op test against Rosetta. Only the ops `CalculateSubRange`
-  uses are needed.
+- [x] **B. x87 subset for the decoder** — `x87.S` has `xadd`, `xdiv`, `xfist32`
+  (verbatim from the intro's bit-verified `x87.S`, minus `xsin`/`xmul` which
+  drag in libm) plus a new `xfromint` (`(long double)(int)`), tested bit-exact
+  vs the long-double reference over 30k cases. `xadd`/`xdiv`/`xfist32` get their
+  end-to-end check against the encoder in step C.
 - [ ] **C. `CalculateSubRange` in AArch64** — port the weight loop
   (`p=1; sqrt while weight halves; p = c0/p; p = c1/p; ...; range/(1+p)` → int32)
   and test its output against the encoder's own subrange values.
@@ -104,5 +105,7 @@ encoder output, and compare to the original.
 
 ## Status
 
-Investigation complete; **step A done** (80-bit `fsqrt`, bit-exact). Next: step B,
-lifting the rest of the 80-bit ops the subrange calculation needs.
+Investigation complete; **steps A and B done** — the full 80-bit primitive set
+(`xsqrt.S` + `x87.S`) the subrange calculation needs, each checked against real
+x87. Next: step C, porting `CalculateSubRange` and validating its integer output
+against the encoder's own subrange values.
