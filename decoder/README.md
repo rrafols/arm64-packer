@@ -1,0 +1,92 @@
+# AArch64 oneKpaq mode-3 decoder — design notes
+
+Port of oneKpaq's mode-3 (single section, fast) decompressor to AArch64. The
+x86-64 port in `fzn_east4k/packers/onekpaq64/onekpaq_decompressor64.asm` (171
+bytes) is the spec: same register roles, same algorithm, round-trip tested
+against the real encoder.
+
+## The precision question, answered: 80-bit is required
+
+The arithmetic coder itself is **pure integer** (`ArithDecoder.cpp`: `u32 range`,
+`value`, `subRange`). No floating point there. The floating point is only in the
+probability model that produces `subRange`, in `BlockCodec.cpp::CalculateSubRange`:
+
+```cpp
+long double p = 1;
+...
+    asm volatile("fsqrt\n" : "=t"(p) : "0"(p));         // p = sqrt(p)
+...
+    p = (long double)(int)it.first.c0 / p;               // fidivr
+    p = (long double)(int)it.first.c1 / p;               // fidivr
+...
+    asm volatile("fsqrt\n" : "=t"(p) : "0"(p));
+...
+u32 ret;
+asm volatile("fistl %0\n" : "=m"(ret) : "t"((long double)(int)range / (1 + p)));
+```
+
+`long double` on x86 is **80-bit x87 extended precision**, and the code uses
+explicit `fsqrt`/`fistl`. Because the coder is an integer arithmetic coder, the
+encoder and decoder must compute the **exact same** `subRange` for every bit or
+they desync — so the decoder must reproduce this 80-bit computation bit-for-bit.
+AArch64 has no 80-bit float, so the decoder needs software extended precision,
+exactly as the intro's synth did.
+
+This is the pessimistic outcome of the M2 investigation, and it is now certain,
+not a guess: reading the encoder settled it before a line of the decoder was
+written.
+
+## Primitives needed (80-bit, round-to-nearest-even, as `finit` leaves the x87)
+
+| op in the decoder | 80-bit primitive | source |
+|---|---|---|
+| `p = 1` | load 1.0 | trivial |
+| `fidivr dword` : `p = int / p` | int→80-bit, divide | reuse `east/x87.S` |
+| `1 + p` (`faddp`) | add | reuse `east/x87.S` |
+| `range / (1+p)` (`fidivr`) | divide | reuse `east/x87.S` |
+| `fistp dword` | round 80-bit → int32, ties to even | reuse `east/x87.S` round-to-int |
+| **`fsqrt`** | **80-bit square root, ties to even** | **new — must be written** |
+
+So most of the datapath is already implemented and bit-verified in
+`fzn_east4k/ports/macos-arm64/src/x87.S` (add, multiply, divide, round-to-integer,
+fsin). The one new primitive is an 80-bit `fsqrt`: compute the integer square
+root of the 126-bit mantissa field and round once to a 64-bit mantissa, ties to
+even — the same "exact in 128 bits, round once" model `x87.S` already uses for
+its other ops.
+
+## The encoder, for round-trip testing
+
+`tools/build_encoder.sh` builds it. It only builds for x86-64 (the `fsqrt`/`fistl`
+inline asm), and runs under Rosetta 2, whose x87 emulation gives the 80-bit
+results the arm64 decoder must match. Usage:
+
+    ./build/onekpaq 3 1 input output.okp     # prints  offset=N shift=M
+
+`offset` points into the compressed data (the decoder walks backwards into the
+bytes before it); `shift` parameterises the weight upload. Both feed the decoder
+exactly as in the x86-64 port.
+
+## Register roles (from the x86-64 port, to be reassigned to AArch64)
+
+    x86-64:  rax range / rbx src / rcx dest bit shift, ch model / rdx header
+             rsi dest / rdi window start / ebp value
+    x87 stack for the subrange maths -> software 80-bit here
+
+Requirements inherited from the algorithm (see the x86-64 README):
+* the compressed data must be writable — it is used as scratch and destroyed;
+* the destination must be zero-filled and writable from −13 bytes to length+1;
+* the decoder does not know the output length; it is taken from elsewhere.
+
+## Verification plan
+
+The context-mixing decoder produces plausible garbage rather than crashing when
+it is subtly wrong, so the only real test is a byte-exact round trip over inputs
+that exercise different shift values: code, text, random, zeros, repetitive data
+— the same spread the x86-64 port's `test/run_tests.sh` uses. Build the arm64
+decoder with clang's integrated assembler (no nasm needed), decompress each
+encoder output, and compare to the original.
+
+## Status
+
+Investigation complete (precision settled, encoder built). Implementation of the
+AArch64 decoder and the new 80-bit `fsqrt` not yet started.

@@ -113,4 +113,19 @@ Open optimisation for M3: give the Mach-O a second segment with `initprot` rw-
 and `maxprot` rwx and unpack into it, to save the `mmap` (the `mprotect` RX
 transition is the same one M1 proved). Decide when building the real stub.
 
-Next: M2, the AArch64 oneKpaq mode-3 decoder — the substantial piece.
+**M2 investigation done** (implementation not started) — see `decoder/README.md`.
+The encoder was cloned and built (`tools/build_encoder.sh`; x86-64, runs under
+Rosetta 2), and reading it settled the precision question definitively:
+
+* oneKpaq's arithmetic coder is **pure integer**; the only floating point is in
+  `CalculateSubRange`, which computes the subrange in **x87 80-bit `long double`**
+  with explicit `fsqrt`/`fistl`. An integer arithmetic coder needs the encoder
+  and decoder to agree on every subrange, so **the arm64 decoder must reproduce
+  that 80-bit maths bit-for-bit** — plain doubles will desync. This is certain
+  now, not a risk to discover later.
+* Most of the datapath already exists and is bit-verified in the intro's
+  `x87.S` (add, divide, round-to-int). The one new 80-bit primitive to write is
+  **`fsqrt`** (integer sqrt of the mantissa, rounded once, ties to even).
+
+Next: M2 implementation — the AArch64 decoder plus the 80-bit `fsqrt`, round-trip
+tested against the encoder.
