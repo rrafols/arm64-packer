@@ -18,6 +18,23 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${ONEKPAQ_SRC:-/tmp/onekpaq_src}"
 [ -d "$SRC" ] || git clone --depth 1 https://github.com/temisu/oneKpaq.git "$SRC"
 cd "$SRC"
+# Emit the clean header block (rawLength + model bytes) on stdout as "H <hex>",
+# alongside "P offset= shift=". pack.py and the decoder need the models and raw
+# length, which the asm header does not carry in recoverable form.
+python3 - <<'PY'
+h=open('StreamCodec.hpp').read()
+if 'GetHeaders' not in h:
+    h=h.replace('\tuint GetShift() const { return _shift; }',
+                '\tuint GetShift() const { return _shift; }\n'
+                '\tconst std::vector<std::vector<u8>> &GetHeaders() const { return _header; }')
+    open('StreamCodec.hpp','w').write(h)
+m=open('onekpaq_main.cpp').read()
+if 'GetHeaders()' not in m:
+    a='fprintf(stdout/* not stderr */, "P offset=%zu shift=%u\\n", src1.size(), s.GetShift());'
+    m=m.replace(a, a+'\n\t\t{ const auto &H=s.GetHeaders(); if(!H.empty()){ '
+                'fprintf(stdout,"H "); for(auto b:H[0]) fprintf(stdout,"%02x",b); fprintf(stdout,"\\n"); } }')
+    open('onekpaq_main.cpp','w').write(m)
+PY
 mkdir -p obj
 clang -arch x86_64 -Os -c log.c -o obj/log.o
 for f in ArithDecoder ArithEncoder BlockCodec CacheFile StreamCodec onekpaq_main; do

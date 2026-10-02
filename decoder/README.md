@@ -99,9 +99,14 @@ encoder output, and compare to the original.
   Validated bit-exact (20k random model profiles) against the encoder's own x87
   `long double` computation: `bash test/subrange_test.sh`. This also exercises
   `xadd`/`xdiv`/`xfist32`/`xsqrt`/`xfromint` together end to end.
-- [ ] **D. the decoder control flow** — see the design notes below.
-- [ ] **E. full round-trip** — decode the encoder's output for the code/text/
-  random/zeros/repetitive spread and compare byte-for-byte.
+- [x] **D. the decoder control flow** — `okp_decode.c`: ArithDecoder(SingleAsm) +
+  DecodeHeader + NoLimitQWContextModel scan + PAQ1CountBooster, calling
+  `calc_subrange` for the FP. Ported as C (the 16 KB page floor leaves room),
+  not the dense asm.
+- [x] **E. full round-trip** — `test/decode_test.sh` plus a 250-input randomized
+  sweep (random / structured / low-entropy / DNA / text, 1-2500 bytes): all
+  decode byte-for-byte. The encoder's own x87 decode was instrumented per bit to
+  localise one bug (unsigned `byteLookup` underflow in the early-position scan).
 
 ## Step D design notes (ready to implement)
 
@@ -155,8 +160,14 @@ Note: the encoder's own asm-stream self-verify aborts on some larger inputs
 and validated bit-exact against the encoder's x87: the 80-bit primitives
 (`xsqrt.S`, `x87.S`) and the full `CalculateSubRange` (`subrange.S`).
 
-Step D is fully scoped and de-risked (design notes above): the x86-64 reference
-decoder runs (`tools/roundtrip_ref.sh`, ground truth), the clean C++ algorithm to
-port is identified, the on-disk format is mapped, and the C-callable 80-bit
-wrappers (`x87_c.S`) are in place. What remains is writing the integer decode
-(ArithDecoder + DecodeHeader + context-model scan) in C and round-tripping it.
+**The decoder is complete and verified.** `okp_decode.c` round-trips every input
+the encoder produces, bit-for-bit, across a 250-input randomized sweep. All three
+test scripts pass: `sqrt_test.sh`, `subrange_test.sh`, `decode_test.sh`.
+
+What `okp_decode` needs (pack.py will bake these in, so the on-disk reversed asm
+header is never parsed): the arith stream (`combine[offset+4 : -4]`), the clean
+header (models + rawLength), and the shift. Build with `-DOKP_DBG` for a per-bit
+`range`/`sub` trace to compare against the encoder's instrumented decode.
+
+Next (M3): pack.py — hand-built signed Mach-O embedding this decoder as the stub,
+the packed payload, and the baked header/shift/rawLength.
