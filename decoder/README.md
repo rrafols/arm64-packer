@@ -95,9 +95,10 @@ encoder output, and compare to the original.
   drag in libm) plus a new `xfromint` (`(long double)(int)`), tested bit-exact
   vs the long-double reference over 30k cases. `xadd`/`xdiv`/`xfist32` get their
   end-to-end check against the encoder in step C.
-- [ ] **C. `CalculateSubRange` in AArch64** — port the weight loop
-  (`p=1; sqrt while weight halves; p = c0/p; p = c1/p; ...; range/(1+p)` → int32)
-  and test its output against the encoder's own subrange values.
+- [x] **C. `CalculateSubRange` in AArch64** — `subrange.S` (`calc_subrange`).
+  Validated bit-exact (20k random model profiles) against the encoder's own x87
+  `long double` computation: `bash test/subrange_test.sh`. This also exercises
+  `xadd`/`xdiv`/`xfist32`/`xsqrt`/`xfromint` together end to end.
 - [ ] **D. the decoder control flow** — the integer arithmetic coder + context /
   model loops from `onekpaq_decompressor64.asm`, calling C's subrange routine.
 - [ ] **E. full round-trip** — decode the encoder's output for the code/text/
@@ -105,7 +106,8 @@ encoder output, and compare to the original.
 
 ## Status
 
-Investigation complete; **steps A and B done** — the full 80-bit primitive set
-(`xsqrt.S` + `x87.S`) the subrange calculation needs, each checked against real
-x87. Next: step C, porting `CalculateSubRange` and validating its integer output
-against the encoder's own subrange values.
+**Steps A, B, C done** — the whole floating-point half of the decoder is ported
+and validated bit-exact against the encoder's x87: the 80-bit primitives
+(`xsqrt.S`, `x87.S`) and the full `CalculateSubRange` (`subrange.S`). Next: step
+D, the integer control flow (arithmetic coder + context/model loop) from
+`onekpaq_decompressor64.asm`, which calls `calc_subrange` for each bit.
