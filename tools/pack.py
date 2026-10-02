@@ -323,8 +323,8 @@ def build_intro(macho_path, out_path):
         parts = [
             seg('__PAGEZERO', 0, VM, 0, 0, 0, 0),
             seg('__TEXT', VM, PAGE, 0, PAGE, 5, 5),
-            seg('__DATA', data_va, PAGE, PAGE, PAGE, 3, 3),
-            seg('__LINKEDIT', VM + 2*PAGE, PAGE, 2*PAGE, linkedit_fs, 1, 1),
+            seg('__DATA', data_va, PAGE, PAGE, 0, 3, 3),   # filesize 0: zero-fill, dyld binds into the mapped tail
+            seg('__LINKEDIT', VM + 2*PAGE, PAGE, PAGE, linkedit_fs, 1, 1),
             struct.pack('<IIIIIIIIIIII', LC_DYLD_INFO_ONLY, 48, 0, 0,
                         bind_off, bind_size, 0, 0, 0, 0, 0, 0),
             struct.pack('<IIIIII', LC_SYMTAB, 24, 0, 0, 0, 0),
@@ -340,7 +340,7 @@ def build_intro(macho_path, out_path):
                           len(parts), len(cmds), 0x00200085, 0)
         return hdr + cmds
 
-    hdr_size = len(loadcmds(0, 2*PAGE, 0, 2*PAGE, 0, 0))
+    hdr_size = len(loadcmds(0, PAGE, 0, PAGE, 0, 0))
     stub_off = hdr_size
     stub_va = VM + stub_off
 
@@ -367,10 +367,10 @@ def build_intro(macho_path, out_path):
 
     cs_len = 400
     for _ in range(4):
-        cs_off = 2*PAGE + ((len(ops) + 15) & ~15)
-        linkedit_fs = (cs_off - 2*PAGE) + cs_len
+        cs_off = PAGE + ((len(ops) + 15) & ~15)
+        linkedit_fs = (cs_off - PAGE) + cs_len
         text = bytearray(b'\0' * PAGE)
-        allc = loadcmds(stub_off, 2*PAGE, len(ops), cs_off, cs_len, linkedit_fs)
+        allc = loadcmds(stub_off, PAGE, len(ops), cs_off, cs_len, linkedit_fs)
         assert len(allc) == hdr_size
         text[0:len(allc)] = allc
         text[stub_off:stub_off+len(stub)] = stub
@@ -378,10 +378,9 @@ def build_intro(macho_path, out_path):
         text[packed_off:packed_off+len(packed)] = packed
         assert packed_off + len(packed) <= PAGE, \
             "payload too big for one __TEXT page: %d" % (packed_off + len(packed))
-        data = bytearray(b'\0' * PAGE)
-        linkedit = bytearray(b'\0' * (cs_off - 2*PAGE))
+        linkedit = bytearray(b'\0' * (cs_off - PAGE))
         linkedit[0:len(ops)] = ops
-        file_wo_sig = bytes(text) + bytes(data) + bytes(linkedit)
+        file_wo_sig = bytes(text) + bytes(linkedit)   # __DATA has no file bytes
         sig = codesig(file_wo_sig, PAGE)
         if len(sig) == cs_len:
             break

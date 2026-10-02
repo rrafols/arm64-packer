@@ -72,8 +72,8 @@ README.md
 - [x] M0  smallest signed arm64 Mach-O that execs and returns 42 (baseline size)
 - [x] M1  W^X probe: map rw-, write code, mprotect r-x, call it
 - [x] M2  AArch64 oneKpaq mode-3 decoder, round-trip vs real encoder
-- [ ] M3  pack.py: hand header + stub + packed payload, self-signed, runs
-- [ ] M4  apply to the intro payload; measure vs the 52 KB linked build
+- [x] M3  pack.py: hand header + stub + packed payload, self-signed, runs
+- [x] M4  apply to the intro payload; measure vs the 52 KB linked build
 
 ## Status
 
@@ -127,14 +127,40 @@ Rosetta 2), and reading it settled the precision question definitively:
   `x87.S` (add, divide, round-to-int). The one new 80-bit primitive to write is
   **`fsqrt`** (integer sqrt of the mantissa, rounded once, ties to even).
 
-**M2 done** — the decoder is complete and round-trip verified (see
-`decoder/README.md`). The 80-bit software x87 (`xsqrt.S` + `x87.S`, bit-exact vs
-real x87) drives `CalculateSubRange` (`subrange.S`), and `okp_decode.c` is the
-full mode-3 decoder (ArithDecoder + header + context-model scan). It decodes
-every input the encoder produces, byte-for-byte, over a 250-input randomized
-sweep. Written in C, not hand-asm: the 16 KB page floor leaves ample room, so
-compactness matters far less than on x86-64.
+**All milestones done — the packer works.** `tools/pack.py --intro <mach-o>`
+produces a signed, self-decompressing arm64 binary that runs bit-identically to
+the original:
 
-Next: M3 — `pack.py`, the hand-built signed Mach-O that embeds `okp_decode` as the
-stub plus the packed payload and the baked header/shift/rawLength, using the M0
-header machinery and the M1 mmap/mprotect unpack path.
+```
+unpacked intro (east)   52816 bytes
+packed intro            16702 bytes   (one 16 KB page + signature)
+  intro image            49152 -> 5452 packed (LZMA, 11.1%)
+  stub                     180 bytes
+  51 imports resolved via dlsym at runtime
+```
+
+Verified by `tools/intro_verify.sh`: the packed offscreen build renders audio
+bit-identical to the unpacked one, with only the clock-seeded effect-1 frames
+differing (exactly as the intro's own `make verify` expects). The floor is one
+16 KB page because W^X needs a writable `__DATA` segment; `__DATA` is given
+`filesize 0` (zero-fill, dyld binds into the mapped tail) so it costs no file
+bytes, leaving the file at one page + the `__LINKEDIT` signature.
+
+**On the compressor:** this uses **LZMA** (`compression_decode_buffer`), not the
+oneKpaq decoder from M2. Testing M2 on the real intro showed oneKpaq's encoder
+emits a broken stream for intro-like content, and on arm64 the page floor makes
+LZMA's final size identical anyway (here LZMA is even smaller). The M2 decoder
+remains a verified artifact for if that encoder bug is ever fixed.
+
+### How the packer works (`tools/pack.py --intro`)
+
+1. Parse the intro Mach-O (`tools/parse_intro.py`): the flat loadable image, the
+   entry offset, `__TEXT` vmsize, total vmsize, and the GOT imports from
+   `LC_DYLD_CHAINED_FIXUPS`. The intro has no rebases, so it is fully
+   position-independent apart from its GOT.
+2. LZMA-compress the image; hand-build a signed one-page Mach-O (M0) with the
+   frameworks as `LC_LOAD_DYLIB`s and `_dlsym`/`_compression_decode_buffer` bound
+   via `LC_DYLD_INFO` opcodes.
+3. Stub: `mmap` RW the full vmsize (syscall), decompress, `dlsym` each import
+   (name without the leading `_`) into the GOT, `mprotect` `__TEXT` r-x (M1
+   path), jump to the entry.

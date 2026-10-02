@@ -23,11 +23,36 @@ operational guide.
 - **M1 done** — `probes/wx.c`: W^X unpack path is `mmap` RW → write → `mprotect`
   RX → call (no `MAP_JIT`, no entitlement).
 - **M2 done** — the arm64 oneKpaq mode-3 decoder, round-trip verified. See below.
-- **M3 TODO** — `tools/pack.py`: hand-built signed Mach-O, stub + packed payload.
-  **Decompressor choice is open (see "oneKpaq vs LZMA" below).** The test on the
-  real intro payload showed oneKpaq's encoder emits a *broken* asm stream for it,
-  and on arm64 LZMA is simpler, reliable, and here even smaller. Likely use LZMA.
-- **M4 TODO** — apply to the intro payload; measure vs the 52 KB linked build.
+  (Not used by the shipping packer; see "oneKpaq vs LZMA".)
+- **M3 + M4 done** — `tools/pack.py --intro <mach-o>` packs the intro into a
+  signed, self-decompressing 16702-byte binary (from 52816), LZMA, verified
+  bit-identical by `tools/intro_verify.sh`. See "The packer" below.
+
+## The packer (M3/M4)
+
+`tools/pack.py --intro <mach-o> [out]` builds a signed one-page Mach-O:
+- `tools/parse_intro.py` extracts the flat image, entry, `__TEXT`/total vmsize, and
+  the GOT imports from `LC_DYLD_CHAINED_FIXUPS` (no rebases → position-independent
+  apart from the GOT).
+- LZMA-compress the image; hand-build the signed Mach-O (M0 machinery) with the
+  frameworks as `LC_LOAD_DYLIB`s and `_dlsym` / `_compression_decode_buffer` bound
+  via `LC_DYLD_INFO` opcodes.
+- Stub: `mmap` RW the full vmsize (syscall), decompress, `dlsym` each import into
+  the GOT, `mprotect` `__TEXT` r-x, jump to entry.
+
+Gotchas that cost debugging time (do not reintroduce):
+- `dlsym` wants the C name WITHOUT the leading `_` (it adds it) — pass `glClear`,
+  not `_glClear`, or every GOT slot resolves to 0 and the intro jumps to PC=0.
+- The chained-fixups `segment_offset` already equals the segment file offset; do
+  not add it again when walking the chain.
+- `__DATA` is given `filesize 0` so it costs no file bytes (zero-fill, dyld binds
+  into the mapped tail); that is what keeps the file at one page + `__LINKEDIT`.
+- `compression_decode_buffer` is in libcompression (dyld shared cache, loads by
+  path), not libSystem.
+
+Tests: `tools/pack_selftest.sh` (skeleton on self-contained payloads),
+`tools/intro_verify.sh` (packed intro vs unpacked: audio bit-identical, only
+clock-seeded frames differ).
 
 ## oneKpaq vs LZMA for the arm64 packer (read before M3)
 
