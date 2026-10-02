@@ -99,15 +99,64 @@ encoder output, and compare to the original.
   Validated bit-exact (20k random model profiles) against the encoder's own x87
   `long double` computation: `bash test/subrange_test.sh`. This also exercises
   `xadd`/`xdiv`/`xfist32`/`xsqrt`/`xfromint` together end to end.
-- [ ] **D. the decoder control flow** — the integer arithmetic coder + context /
-  model loops from `onekpaq_decompressor64.asm`, calling C's subrange routine.
+- [ ] **D. the decoder control flow** — see the design notes below.
 - [ ] **E. full round-trip** — decode the encoder's output for the code/text/
   random/zeros/repetitive spread and compare byte-for-byte.
+
+## Step D design notes (ready to implement)
+
+Port the **clean C++ decode path**, not the dense flag-threaded asm — the arm64
+file rounds up to a 16 KB page regardless, so a compact C decoder that calls the
+80-bit asm ops fits with room to spare and is far easier to get right. Hand-asm
+is a later size optimisation if ever needed.
+
+The algorithm (`BlockCodec::Decode` + `ArithDecoder` in the oneKpaq source), for
+mode 3 = `Single` = `NoLimitQWContextModel` + `SingleAsm` arithmetic decoder:
+
+    DecodeHeader(header) -> rawLength, models[] = {model_byte, weight}
+    ret = zeroed(rawLength); bitLength = rawLength*8
+    PreDecode( CalculateSubRange(ret, -1,       models, range, shift) )
+    for i in 0..bitLength-1:
+        if Decode( CalculateSubRange(ret, i,    models, range, shift) ):
+            ret[i>>3] |= 0x80 >> (i&7)
+    ProcessEndOfSection( CalculateSubRange(ret, bitLength, models, range, shift) )
+
+Pieces to port (all integer except the FP, which `subrange.S` already does):
+* **ArithDecoder (SingleAsm)** — pure integer, from `ArithDecoder.cpp`. Normalize
+  checks the start/anchor/filler bits; Decode/ProcessEndOfSection subtract the
+  subrange. ~40 lines.
+* **DecodeHeader** — `header[0..1]` = size, `header[2]` = header length,
+  `header[3..]` = model bytes; reconstruct `{model, weight}` by the `>=model`
+  weight-doubling rule. ~15 lines.
+* **NoLimitQWContextModel iterator + PAQ1CountBooster + CreateWeightProfile** —
+  scans the already-decoded `ret` for context matches to build the per-model
+  `{c0, c1, weight}` list. ~40 lines. This is what feeds `calc_subrange`.
+* **CalculateSubRange** — `subrange.S`'s `calc_subrange` given that list, plus the
+  `bitPos == -1` special case (NoLimit: Initialize + Increment(false) + Finalize).
+
+On-disk format the real decoder consumes (so the arm64 one matches the packer):
+`file = src1 ++ src2 ++ 4 zero bytes`, and the encoder prints `offset = len(src1)`.
+`src2` (from `offset`) is the arith bitstream, read forward from `offset+4`
+(the stream has a -4 bias; normalize reads `[base+4]`). `src1` is the header,
+stored reversed: the asm walks a pointer back from `offset+3` into it. The clean
+C++ keeps the header as a forward `_header` block, so the C port can read src1 in
+natural order with the documented layout rather than the asm's backward walk.
+
+Bring-up: `tools/roundtrip_ref.sh <file>` encodes and decodes through the real
+x86-64 decompressor (ground truth). For debugging, dump per-bit (range, value,
+subrange, bit) from both the reference and the arm64 port and diff — a
+context-mixing decoder fails silently, so stage-by-stage comparison is the way.
+Note: the encoder's own asm-stream self-verify aborts on some larger inputs
+("End of section not detected"); small inputs are clean, so bring up on those.
 
 ## Status
 
 **Steps A, B, C done** — the whole floating-point half of the decoder is ported
 and validated bit-exact against the encoder's x87: the 80-bit primitives
-(`xsqrt.S`, `x87.S`) and the full `CalculateSubRange` (`subrange.S`). Next: step
-D, the integer control flow (arithmetic coder + context/model loop) from
-`onekpaq_decompressor64.asm`, which calls `calc_subrange` for each bit.
+(`xsqrt.S`, `x87.S`) and the full `CalculateSubRange` (`subrange.S`).
+
+Step D is fully scoped and de-risked (design notes above): the x86-64 reference
+decoder runs (`tools/roundtrip_ref.sh`, ground truth), the clean C++ algorithm to
+port is identified, the on-disk format is mapped, and the C-callable 80-bit
+wrappers (`x87_c.S`) are in place. What remains is writing the integer decode
+(ArithDecoder + DecodeHeader + context-model scan) in C and round-tripping it.
