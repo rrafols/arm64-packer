@@ -71,7 +71,7 @@ README.md
 
 - [x] M0  smallest signed arm64 Mach-O that execs and returns 42 (baseline size)
 - [x] M1  W^X probe: map rw-, write code, mprotect r-x, call it
-- [ ] M2  AArch64 oneKpaq mode-3 decoder, round-trip vs real encoder
+- [x] M2  AArch64 oneKpaq mode-3 decoder, round-trip vs real encoder
 - [ ] M3  pack.py: hand header + stub + packed payload, self-signed, runs
 - [ ] M4  apply to the intro payload; measure vs the 52 KB linked build
 
@@ -127,5 +127,14 @@ Rosetta 2), and reading it settled the precision question definitively:
   `x87.S` (add, divide, round-to-int). The one new 80-bit primitive to write is
   **`fsqrt`** (integer sqrt of the mantissa, rounded once, ties to even).
 
-Next: M2 implementation — the AArch64 decoder plus the 80-bit `fsqrt`, round-trip
-tested against the encoder.
+**M2 done** — the decoder is complete and round-trip verified (see
+`decoder/README.md`). The 80-bit software x87 (`xsqrt.S` + `x87.S`, bit-exact vs
+real x87) drives `CalculateSubRange` (`subrange.S`), and `okp_decode.c` is the
+full mode-3 decoder (ArithDecoder + header + context-model scan). It decodes
+every input the encoder produces, byte-for-byte, over a 250-input randomized
+sweep. Written in C, not hand-asm: the 16 KB page floor leaves ample room, so
+compactness matters far less than on x86-64.
+
+Next: M3 — `pack.py`, the hand-built signed Mach-O that embeds `okp_decode` as the
+stub plus the packed payload and the baked header/shift/rawLength, using the M0
+header machinery and the M1 mmap/mprotect unpack path.
