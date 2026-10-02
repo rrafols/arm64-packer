@@ -118,6 +118,29 @@ sequence — Standard first, then SingleAsm; the decoder here is **SingleAsm**
 - **Encoder is slow** on larger inputs (model search is O(bits × models ×
   iterations)); multi-KB inputs can take minutes. Run encodes in the background.
 
+## M3 findings so far (probes/bind.py)
+
+- **Import binding works via legacy `LC_DYLD_INFO_ONLY` bind opcodes on arm64** —
+  no chained fixups needed. `probes/bind.py` binds `_write` into a `__DATA` slot
+  and calls it from a hand-built, self-signed Mach-O. So the stub can bind
+  `compression_decode_buffer` / `dlsym` directly through dyld.
+- **W^X forces a writable `__DATA` segment** for the bound pointers — the x86-64
+  trick of parking them in an RWX `__TEXT` page is gone. That pushes the minimum
+  past one page (bind.py is 33 KB = __TEXT + __DATA + __LINKEDIT). A `__DATA` with
+  `filesize 0` (zero-fill, dyld binds into the mapped tail) may shrink this toward
+  ~17 KB — untested; worth trying.
+- **The intro links directly against frameworks** (OpenGL/CGL/CoreAudio/CoreGraphics
+  via dyld chained fixups), not `dlopen`/`dlsym` like x86-64. So its GOT must be
+  bound. When the payload is decompressed into fresh memory, dyld has not bound it,
+  so the **stub must resolve the intro's imports itself**: bind `dlsym` via dyld,
+  then `dlsym` each intro import by name and write it into the decompressed GOT.
+  pack.py must extract the intro's import names + GOT slot offsets from its
+  `LC_DYLD_CHAINED_FIXUPS`. The intro's code is PC-relative (`adrp`), so the payload
+  can load at any base as long as its segments stay contiguous; watch for absolute
+  pointers in its data (AudioQueue callback, display-list/data pointers) that would
+  need relocating too. This is more involved than the x86-64 packer, where the
+  intro resolved its own imports.
+
 ## M3 plan (next) — LZMA path (recommended)
 
 `tools/pack.py`, modelled on `~/dev/fzn_east4k/ports/macos-x86_64/tools/pack.py`
